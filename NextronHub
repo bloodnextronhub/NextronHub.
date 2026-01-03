@@ -1,0 +1,1006 @@
+-- Fix It Up GUI Script
+-- Version: Luau (Roblox Lua)
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+
+-- Player references
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- Wait for game to load
+repeat
+	task.wait()
+until game:IsLoaded()
+
+-- Vehicle workspace
+local vehicles = Workspace:WaitForChild("Vehicles")
+
+-- Car list from GitHub
+local carList = HttpService:JSONDecode(game:HttpGet("https://raw.githubusercontent.com/mokaEZF/ListV2/refs/heads/main/CarListJson%20-%20Copy.json"))
+
+-- Configuration variables
+local autoKmEnabled = false
+local kmSpeed = 400
+local repairTimeout = 30
+local isBusy = false
+local isAutoDriving = false
+local isAutoDrivingActive = false
+local isAutoBuying = false
+local isAutoBuyActive = false
+local map = Workspace:WaitForChild("Map")
+local moveableParts = Workspace:WaitForChild("MoveableParts")
+local partsStore = Workspace.PartsStore.SpareParts.Parts
+local kmStat = localPlayer.PlayerData.Status.KMs
+local moneyStat = localPlayer.PlayerData.Status.Money
+local sellCarLocation = map:WaitForChild("SellCar")
+local garages = Workspace:WaitForChild("Garages")
+local playerGarage = nil
+local garageLoaded = false
+
+-- Sound for rare cars
+local rareCarSound = Instance.new("Sound")
+rareCarSound.SoundId = "rbxassetid://5914883816"
+rareCarSound.Volume = 1
+rareCarSound.Parent = Workspace
+rareCarSound.Name = "RareCarAlert"
+
+-- Rarity system
+local rarityColors = {
+	Common = Color3.fromRGB(180, 180, 180),
+	Uncommon = Color3.fromRGB(80, 200, 80),
+	Rare = Color3.fromRGB(80, 150, 255),
+	Epic = Color3.fromRGB(180, 80, 220),
+	Legendary = Color3.fromRGB(255, 180, 60),
+	Mythical = Color3.fromRGB(255, 80, 80)
+}
+
+local rarityTiers = {
+	{
+		SpawnChance = 30,
+		Color = rarityColors.Common,
+		Name = "Common"
+	},
+	{
+		SpawnChance = 15,
+		Color = rarityColors.Uncommon,
+		Name = "Uncommon"
+	},
+	{
+		SpawnChance = 7,
+		Color = rarityColors.Rare,
+		Name = "Rare"
+	},
+	{
+		SpawnChance = 3,
+		Color = rarityColors.Epic,
+		Name = "Epic"
+	},
+	{
+		SpawnChance = 1,
+		Color = rarityColors.Legendary,
+		Name = "Legendary"
+	},
+	{
+		SpawnChance = 0,
+		Color = rarityColors.Mythical,
+		Name = "Mythical"
+	}
+}
+
+-- Teleport locations
+local teleportLocations = {
+	["Junkyard Center"] = CFrame.new(-1611.93713, 4.21079254, -321.499237, -0.641851544, 0.0000000234962094, 0.766828895, 0.0000000134162335, 1, -0.0000000194110825, -0.766828895, -0.00000000217107754, -0.641851544),
+	["Spare Parts"] = CFrame.new(-1497.12939, 4.60256147, -526.442139, 0.434857607, 0.0000000994275808, -0.900499225, -0.0000000222187531, 1, 0.0000000996842431, 0.900499225, -0.0000000233404815, 0.434857607),
+	Repair = CFrame.new(-995.09845, 3.98317409, -122.090286, 0.38651529, 0.00000000888380924, -0.922282994, 0.000000000290557328, 1, 0.00000000975417969, 0.922282994, -0.00000000403811562, 0.38651529),
+	Paint = CFrame.new(-1026.1333, 3.9809761, -185.034897, 0.441830546, 0.000000119221127, -0.897098541, -0.0000000446282229, 1, 0.000000110916488, 0.897098541, -0.00000000897037999, 0.441830546),
+	["Sell Cars"] = CFrame.new(-1887.35632, 3.97528863, -777.926514, 0.161551118, -0.0000000288608231, 0.986864328, -0.0000000220204992, 1, 0.000000032849762, -0.986864328, -0.0000000270381602, 0.161551118),
+	["Gas Station"] = CFrame.new(-1389.23877, 3.96460819, -661.737915, 0.93418926, 0.0000000223161205, 0.356777877, -0.0000000045373989, 1, -0.0000000506683087, -0.356777877, 0.0000000457149447, 0.93418926),
+	["Pit Wheels"] = CFrame.new(-1420.18494, 4.00986481, -1482.87549, -0.0603592806, 0.0000000516541085, -0.998176694, -0.0000000112575478, 1, 0.0000000524292005, 0.998176694, 0.0000000144016106, -0.0603592806),
+	["Custom Parts"] = CFrame.new(-10876.4365, 4.05648661, 5775.33545, -0.952225566, 0.0000000138292968, -0.305395633, -0.0000000055501177, 1, 0.0000000625885193, 0.305395633, 0.0000000612933704, -0.952225566)
+}
+
+-- Auto-buy system
+local selectedCars = {}
+local currentTargetCar = nil
+local autoBuyCooldown = 0.4
+local lastAutoBuyTime = 0
+
+-- UI references
+local mainGui = Instance.new("ScreenGui")
+mainGui.Name = "CarBuyerUI"
+mainGui.Parent = playerGui
+mainGui.ResetOnSpawn = false
+
+-- UI buttons storage
+local uiButtons = {}
+
+-- Helper functions
+local function GetRarityInfo(spawnChance)
+	for _, tier in ipairs(rarityTiers) do
+		if tier.SpawnChance <= spawnChance then
+			return tier.Color, tier.Name
+		end
+	end
+	return rarityColors.Mythical, "Mythical"
+end
+
+local function waitUntil(condition, timeout)
+	local startTime = tick()
+	while not condition() do
+		if timeout then
+			local elapsed = tick() - startTime
+			if elapsed >= timeout then
+				return false
+			end
+		end
+		task.wait(0.03)
+	end
+	return true
+end
+
+local function GetCharacter()
+	local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+	waitUntil(function()
+		return character and character:FindFirstChildOfClass("Humanoid")
+	end, 5)
+	return character
+end
+
+local function CreateFrame(parent, size, position, gradientColors)
+	local frame = Instance.new("Frame")
+	frame.Size = size
+	frame.Position = position
+	
+	local bgColor = gradientColors and gradientColors[1] or Color3.fromRGB(40, 40, 40)
+	frame.BackgroundColor3 = bgColor
+	frame.BorderSizePixel = 0
+	
+	if gradientColors then
+		local gradient = Instance.new("UIGradient")
+		gradient.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, gradientColors[1]),
+			ColorSequenceKeypoint.new(1, gradientColors[2])
+		})
+		gradient.Rotation = 90
+		gradient.Parent = frame
+	end
+	
+	frame.Parent = parent
+	return frame
+end
+
+local function CreateButton(parent, size, position, text, color)
+	local button = Instance.new("TextButton")
+	button.Size = size
+	button.Position = position
+	button.BackgroundColor3 = color
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.Text = text
+	button.Font = Enum.Font.GothamBold
+	button.TextSize = 14
+	button.BorderSizePixel = 0
+	button.AutoButtonColor = false
+	
+	table.insert(uiButtons, button)
+	
+	local baseColor = color
+	local hoverColor = Color3.new(
+		math.min(baseColor.R * 1.2, 1),
+		math.min(baseColor.G * 1.2, 1),
+		math.min(baseColor.B * 1.2, 1)
+	)
+	
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2), {
+			BackgroundColor3 = hoverColor
+		}):Play()
+	end)
+	
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2), {
+			BackgroundColor3 = baseColor
+		}):Play()
+	end)
+	
+	button.MouseButton1Down:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1), {
+			BackgroundColor3 = Color3.new(baseColor.R * 0.8, baseColor.G * 0.8, baseColor.B * 0.8)
+		}):Play()
+	end)
+	
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1), {
+			BackgroundColor3 = hoverColor
+		}):Play()
+	end)
+	
+	button.Parent = parent
+	return button
+end
+
+-- Main window
+local mainFrame = CreateFrame(mainGui, UDim2.new(0, 465, 0, 650), UDim2.new(0, 10, 0, 10), {
+	Color3.fromRGB(35, 35, 45),
+	Color3.fromRGB(25, 25, 35)
+})
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = mainFrame
+
+-- Window dragging
+local isDragging = false
+local dragStartPos = nil
+local frameStartPos = nil
+local dragInput = nil
+
+mainFrame.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		isDragging = true
+		dragStartPos = input.Position
+		frameStartPos = mainFrame.Position
+		
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				isDragging = false
+			end
+		end)
+	end
+end)
+
+mainFrame.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if input == dragInput and isDragging then
+		local delta = input.Position - dragStartPos
+		mainFrame.Position = UDim2.new(
+			frameStartPos.X.Scale,
+			frameStartPos.X.Offset + delta.X,
+			frameStartPos.Y.Scale,
+			frameStartPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+-- Title bar
+local titleBar = CreateFrame(mainFrame, UDim2.new(1, 0, 0, 45), UDim2.new(0, 0, 0, 0), {
+	Color3.fromRGB(80, 120, 200),
+	Color3.fromRGB(60, 100, 180)
+})
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -80, 1, 0)
+titleLabel.Position = UDim2.new(0, 10, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.Text = "FIX IT UP | BY NexrtonHub"
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 16
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = titleBar
+
+local closeButton = CreateButton(titleBar, UDim2.new(0, 30, 0, 30), UDim2.new(1, -35, 0.5, -15), "X", Color3.fromRGB(220, 80, 80))
+closeButton.Name = "CloseButton"
+closeButton.MouseButton1Click:Connect(function()
+	mainGui:Destroy()
+end)
+
+local minButton = CreateButton(titleBar, UDim2.new(0, 30, 0, 30), UDim2.new(1, -70, 0.5, -15), "_", Color3.fromRGB(200, 160, 60))
+minButton.Name = "MinButton"
+
+local isMinimized = false
+minButton.MouseButton1Click:Connect(function()
+	isMinimized = not isMinimized
+	if isMinimized then
+		for _, guiObject in ipairs(mainFrame:GetDescendants()) do
+			if guiObject:IsA("GuiObject") and guiObject ~= titleBar and guiObject ~= minButton and guiObject ~= closeButton and guiObject.Parent ~= titleBar then
+				guiObject.Visible = false
+			end
+		end
+		mainFrame.Size = UDim2.new(0, 465, 0, 45)
+	else
+		for _, guiObject in ipairs(mainFrame:GetDescendants()) do
+			if guiObject:IsA("GuiObject") then
+				guiObject.Visible = true
+			end
+		end
+		mainFrame.Size = UDim2.new(0, 465, 0, 650)
+	end
+end)
+
+-- Tab selector
+local tabSelector = CreateFrame(mainFrame, UDim2.new(1, -20, 0, 40), UDim2.new(0, 10, 0, 50), {
+	Color3.fromRGB(50, 50, 60),
+	Color3.fromRGB(40, 40, 50)
+})
+
+local tabCorner = Instance.new("UICorner")
+tabCorner.CornerRadius = UDim.new(0, 6)
+tabCorner.Parent = tabSelector
+
+local carsTab = CreateButton(tabSelector, UDim2.new(0.166, 0, 1, 0), UDim2.new(0, 0, 0, 0), "CARS", Color3.fromRGB(80, 120, 200))
+local teleportTab = CreateButton(tabSelector, UDim2.new(0.166, 0, 1, 0), UDim2.new(0.166, 0, 0, 0), "TELEPORT", Color3.fromRGB(60, 60, 60))
+local visualTab = CreateButton(tabSelector, UDim2.new(0.166, 0, 1, 0), UDim2.new(0.332, 0, 0, 0), "VISUAL", Color3.fromRGB(60, 60, 60))
+local boostTab = CreateButton(tabSelector, UDim2.new(0.166, 0, 1, 0), UDim2.new(0.498, 0, 0, 0), "BOOST", Color3.fromRGB(60, 60, 60))
+local repairTab = CreateButton(tabSelector, UDim2.new(0.166, 0, 1, 0), UDim2.new(0.664, 0, 0, 0), "AUTO FARM", Color3.fromRGB(60, 60, 60))
+local autobuyTab = CreateButton(tabSelector, UDim2.new(0.166, 0, 1, 0), UDim2.new(0.83, 0, 0, 0), "AUTO BUY", Color3.fromRGB(60, 60, 60))
+
+-- Content frames
+local contentFrame = Instance.new("Frame")
+contentFrame.Size = UDim2.new(1, -20, 1, -120)
+contentFrame.Position = UDim2.new(0, 10, 0, 100)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Parent = mainFrame
+
+local carsFrame = Instance.new("Frame")
+carsFrame.Size = UDim2.new(1, 0, 1, 0)
+carsFrame.BackgroundTransparency = 1
+carsFrame.Visible = true
+carsFrame.Parent = contentFrame
+
+local teleportFrame = Instance.new("Frame")
+teleportFrame.Size = UDim2.new(1, 0, 1, 0)
+teleportFrame.BackgroundTransparency = 1
+teleportFrame.Visible = false
+teleportFrame.Parent = contentFrame
+
+local visualFrame = Instance.new("Frame")
+visualFrame.Size = UDim2.new(1, 0, 1, 0)
+visualFrame.BackgroundTransparency = 1
+visualFrame.Visible = false
+visualFrame.Parent = contentFrame
+
+local boostFrame = Instance.new("Frame")
+boostFrame.Size = UDim2.new(1, 0, 1, 0)
+boostFrame.BackgroundTransparency = 1
+boostFrame.Visible = false
+boostFrame.Parent = contentFrame
+
+local repairFrame = Instance.new("Frame")
+repairFrame.Size = UDim2.new(1, 0, 1, 0)
+repairFrame.BackgroundTransparency = 1
+repairFrame.Visible = false
+repairFrame.Parent = contentFrame
+
+local autobuyFrame = Instance.new("Frame")
+autobuyFrame.Size = UDim2.new(1, 0, 1, 0)
+autobuyFrame.BackgroundTransparency = 1
+autobuyFrame.Visible = false
+autobuyFrame.Parent = contentFrame
+
+-- Status bar
+local statusBar = CreateFrame(mainFrame, UDim2.new(1, -20, 0, 25), UDim2.new(0, 10, 1, -30), {
+	Color3.fromRGB(40, 40, 50),
+	Color3.fromRGB(30, 30, 40)
+})
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 6)
+statusCorner.Parent = statusBar
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -10, 1, 0)
+statusLabel.Position = UDim2.new(0, 5, 0, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusLabel.Text = "Ready to use..."
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 12
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = statusBar
+
+-- Cars tab content
+local carsScroll = Instance.new("ScrollingFrame")
+carsScroll.Size = UDim2.new(1, 0, 1, 0)
+carsScroll.BackgroundTransparency = 1
+carsScroll.ScrollBarThickness = 5
+carsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+carsScroll.Parent = carsFrame
+
+-- Teleport tab content
+local teleportScroll = Instance.new("ScrollingFrame")
+teleportScroll.Size = UDim2.new(1, 0, 1, 0)
+teleportScroll.BackgroundTransparency = 1
+teleportScroll.ScrollBarThickness = 5
+teleportScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+teleportScroll.Parent = teleportFrame
+
+-- Visual tab content
+local highlightsButton = CreateButton(visualFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 10), "Highlights: ON", Color3.fromRGB(80, 80, 80))
+
+local highlightPreview = Instance.new("Frame")
+highlightPreview.Size = UDim2.new(1, 0, 0, 30)
+highlightPreview.Position = UDim2.new(0, 0, 0, 60)
+highlightPreview.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+highlightPreview.BorderSizePixel = 0
+highlightPreview.Parent = visualFrame
+
+local highlightCorner = Instance.new("UICorner")
+highlightCorner.CornerRadius = UDim.new(0, 6)
+highlightCorner.Parent = highlightPreview
+
+-- Boost tab content
+local speedBoostButton = CreateButton(boostFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 10), "Speed Boost: ON", Color3.fromRGB(80, 80, 80))
+
+local boostForceLabel = Instance.new("TextLabel")
+boostForceLabel.Size = UDim2.new(1, 0, 0, 20)
+boostForceLabel.Position = UDim2.new(0, 0, 0, 60)
+boostForceLabel.BackgroundTransparency = 1
+boostForceLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+boostForceLabel.Text = "Boost Force: 300"
+boostForceLabel.Font = Enum.Font.Gotham
+boostForceLabel.TextSize = 12
+boostForceLabel.TextXAlignment = Enum.TextXAlignment.Left
+boostForceLabel.Parent = boostFrame
+
+local adjustBoostButton = CreateButton(boostFrame, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 85), "Adjust Boost Force", Color3.fromRGB(80, 80, 80))
+
+local autoKmButton = CreateButton(boostFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 170), "Auto KM: OFF", Color3.fromRGB(80, 80, 80))
+
+local kmSpeedLabel = Instance.new("TextLabel")
+kmSpeedLabel.Size = UDim2.new(1, 0, 0, 20)
+kmSpeedLabel.Position = UDim2.new(0, 0, 0, 220)
+kmSpeedLabel.BackgroundTransparency = 1
+kmSpeedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+kmSpeedLabel.Text = "KM Speed: 400"
+kmSpeedLabel.Font = Enum.Font.Gotham
+kmSpeedLabel.TextSize = 12
+kmSpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+kmSpeedLabel.Parent = boostFrame
+
+local adjustKmButton = CreateButton(boostFrame, UDim2.new(1, 0, 0, 30), UDim2.new(0, 0, 0, 245), "Adjust KM Speed", Color3.fromRGB(80, 80, 80))
+
+-- Repair tab content
+local repairCarButton = CreateButton(repairFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 60), "Repair The Car", Color3.fromRGB(80, 120, 200))
+
+local sellCarButton = CreateButton(repairFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 110), "Sell The Car", Color3.fromRGB(160, 80, 80))
+
+local autoFarmButton = CreateButton(repairFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 170), "Auto Farm: OFF", Color3.fromRGB(80, 80, 80))
+
+local repairStatusLabel = Instance.new("TextLabel")
+repairStatusLabel.Size = UDim2.new(1, 0, 0, 100)
+repairStatusLabel.Position = UDim2.new(0, 0, 0, 220)
+repairStatusLabel.BackgroundTransparency = 1
+repairStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+repairStatusLabel.Text = "Status: Ready\n\n...\n...."
+repairStatusLabel.Font = Enum.Font.Gotham
+repairStatusLabel.TextSize = 12
+repairStatusLabel.TextWrapped = true
+repairStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+repairStatusLabel.Parent = repairFrame
+
+-- Autobuy tab content
+local autoBuyButton = CreateButton(autobuyFrame, UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 1, -140), "Auto Buy: OFF", Color3.fromRGB(160, 80, 80))
+
+local autobuyInfoLabel = Instance.new("TextLabel")
+autobuyInfoLabel.Size = UDim2.new(1, 0, 0, 60)
+autobuyInfoLabel.Position = UDim2.new(0, 0, 1, -90)
+autobuyInfoLabel.BackgroundTransparency = 1
+autobuyInfoLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+autobuyInfoLabel.Text = "Select cars to auto-buy"
+autobuyInfoLabel.Font = Enum.Font.Gotham
+autobuyInfoLabel.TextSize = 12
+autobuyInfoLabel.TextWrapped = true
+autobuyInfoLabel.TextXAlignment = Enum.TextXAlignment.Center
+autobuyInfoLabel.Parent = autobuyFrame
+
+local autobuyScroll = Instance.new("ScrollingFrame")
+autobuyScroll.Size = UDim2.new(1, 0, 1, -150)
+autobuyScroll.BackgroundTransparency = 1
+autobuyScroll.ScrollBarThickness = 5
+autobuyScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+autobuyScroll.Parent = autobuyFrame
+
+-- Game functions
+local boostForce = 300
+local speedBoostEnabled = true
+local highlightsEnabled = true
+local highlightColor = Color3.fromRGB(255, 255, 0)
+local highlightedCars = {}
+local carUiElements = {}
+local teleportUiElements = {}
+
+local function GetMyCar()
+	for _, vehicle in pairs(vehicles:GetChildren()) do
+		if vehicle:GetAttribute("Owner") == localPlayer.Name then
+			return vehicle
+		end
+	end
+	
+	local character = localPlayer.Character
+	if character then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.SeatPart then
+			local seatParent = humanoid.SeatPart:FindFirstAncestorOfClass("Model")
+			if seatParent and seatParent:GetAttribute("Owner") == localPlayer.Name then
+				return seatParent
+			end
+		end
+	end
+	
+	return nil
+end
+
+local function ConfirmUi()
+	while true do
+		task.wait(0.15)
+		local hud = playerGui:FindFirstChild("HUD")
+		if hud then
+			local frames = hud:FindFirstChild("Frames")
+			if frames then
+				local confirmation = frames:FindFirstChild("Confirmation")
+				if confirmation and confirmation.Visible == true then
+					break
+				end
+			end
+		end
+	end
+	
+	firesignal(playerGui.HUD.Frames.Confirmation.Confirm.Activated)
+	
+	while true do
+		task.wait(0.15)
+		firesignal(playerGui.HUD.Frames.Confirmation.Confirm.Activated)
+		
+		local hud = playerGui:FindFirstChild("HUD")
+		if hud then
+			local frames = hud:FindFirstChild("Frames")
+			if frames then
+				local confirmation = frames:FindFirstChild("Confirmation")
+				if confirmation and confirmation.Visible == false then
+					break
+				end
+			end
+		end
+	end
+	
+	task.wait(0.2)
+end
+
+local function IdentifyCar(carModel)
+	if not carModel or not carModel.Parent then
+		return "Unknown Car"
+	end
+	
+	local meshIds = {}
+	
+	for _, category in pairs({"Body", "Misc", "Wheels"}) do
+		local categoryFolder = carModel:FindFirstChild(category)
+		if categoryFolder then
+			for _, descendant in pairs(categoryFolder:GetDescendants()) do
+				if descendant:IsA("MeshPart") and descendant.MeshId ~= "" then
+					table.insert(meshIds, descendant.MeshId)
+				end
+			end
+		end
+	end
+	
+	for carName, carData in pairs(carList) do
+		if carData.Meshes then
+			local matchCount = 0
+			local requiredMatches = math.min(2, #carData.Meshes)
+			
+			for _, meshId in pairs(carData.Meshes) do
+				for _, foundMeshId in pairs(meshIds) do
+					if foundMeshId == meshId then
+						matchCount += 1
+						if matchCount >= requiredMatches then
+							if carData and carData.SpawnChance and carData.SpawnChance <= 1 then
+								rareCarSound:Play()
+								task.delay(1.5, function()
+									if rareCarSound.IsPlaying then
+										rareCarSound:Stop()
+									end
+								end)
+							end
+							return carName
+						end
+					end
+				end
+			end
+		end
+	end
+	
+	return "Unknown Car"
+end
+
+local function GetCarInfo(carModel)
+	if not carModel or not carModel.Parent then
+		return "Car No Longer Available", rarityColors.Common, "Unknown"
+	end
+	
+	local carName = IdentifyCar(carModel)
+	local carData = carList[carName]
+	local spawnChance = carData and carData.SpawnChance or 50
+	
+	local rarityColor, rarityName = GetRarityInfo(spawnChance)
+	
+	if carData and carData.Price and carData.Price.Min and carData.Price.Max then
+		return string.format("%s\n$%s - $%s", carName, tostring(carData.Price.Min), tostring(carData.Price.Max)), rarityColor, string.format("%s (%s%%)", rarityName, spawnChance)
+	end
+	
+	return carName, rarityColor, string.format("%s (%s%%)", rarityName, spawnChance)
+end
+
+local function ClearCarUI()
+	for _, uiElement in pairs(carUiElements) do
+		if uiElement and uiElement.Parent then
+			uiElement:Destroy()
+		end
+	end
+	carUiElements = {}
+	carsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+end
+
+local function ClearHighlights()
+	for _, highlight in pairs(highlightedCars) do
+		if highlight and highlight.Parent then
+			highlight:Destroy()
+		end
+	end
+	highlightedCars = {}
+end
+
+local function HighlightCar(carModel)
+	if not highlightsEnabled or not carModel or not carModel.Parent then
+		return
+	end
+	
+	if highlightedCars[carModel] then
+		return
+	end
+	
+	local carData = carList[IdentifyCar(carModel)]
+	local spawnChance = carData and carData.SpawnChance or 50
+	local rarityColor = GetRarityInfo(spawnChance)
+	
+	local highlight = Instance.new("Highlight")
+	highlight.Parent = carModel
+	highlight.FillTransparency = 0.92
+	highlight.OutlineColor = rarityColor
+	highlight.FillColor = rarityColor
+	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	
+	highlightedCars[carModel] = highlight
+end
+
+local function UpdateHighlightColor()
+	highlightPreview.BackgroundColor3 = highlightColor
+	
+	for _, highlight in pairs(highlightedCars) do
+		if highlight and highlight.Parent then
+			highlight.OutlineColor = highlightColor
+			highlight.FillColor = highlightColor
+		end
+	end
+end
+
+-- Teleport functions
+local function TeleportToCar(carModel)
+	local character = localPlayer.Character
+	if not character or not carModel or not carModel.Parent or not carModel:FindFirstChild("ClickDetector") then
+		statusLabel.Text = "Error: Car no longer available"
+		return
+	end
+	
+	local carName = IdentifyCar(carModel)
+	statusLabel.Text = "Teleporting to " .. carName
+	
+	local carPosition = carModel:GetPivot().Position
+	
+	if character:FindFirstChild("Humanoid") and character.Humanoid.Sit then
+		character.Humanoid.Sit = false
+		task.wait(0.5)
+	end
+	
+	character:PivotTo(CFrame.new(carPosition + Vector3.new(8, 0, 8)))
+	statusLabel.Text = "Teleported to " .. carName
+end
+
+local function TeleportToLocation(locationName, targetCFrame)
+	local character = localPlayer.Character
+	if not character then
+		statusLabel.Text = "Error: No character found"
+		return
+	end
+	
+	statusLabel.Text = "Teleporting to " .. locationName
+	
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	
+	if humanoid and humanoid.SeatPart then
+		local vehicle = humanoid.SeatPart:FindFirstAncestorOfClass("Model")
+		local myCar = GetMyCar()
+		
+		if vehicle then
+			local bodyVelocity = Instance.new("BodyVelocity", myCar:FindFirstChild("Body"):FindFirstChild("Engine"))
+			bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+			bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+			bodyVelocity.P = math.huge
+			
+			vehicle:PivotTo(targetCFrame + Vector3.new(0, 3, 0))
+			
+			task.delay(1, function()
+				bodyVelocity:Destroy()
+			end)
+			
+			statusLabel.Text = "Teleported vehicle to " .. locationName
+			return
+		end
+	end
+	
+	if humanoid and humanoid.Sit then
+		humanoid.Sit = false
+		task.wait(0.5)
+	end
+	
+	character:PivotTo(targetCFrame)
+	statusLabel.Text = "Teleported to " .. locationName
+end
+
+local function TeleportPlayer(targetCFrame)
+	local character = localPlayer.Character
+	if not character then
+		return
+	end
+	
+	if character:FindFirstChild("Humanoid") and character.Humanoid.Sit == true then
+		character.Humanoid.Sit = false
+	end
+	
+	if not character:FindFirstChild("BodyVelocity") then
+		local bodyVelocity = Instance.new("BodyVelocity", character.HumanoidRootPart)
+		bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+		bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bodyVelocity.P = math.huge
+	end
+	
+	character:PivotTo(targetCFrame - Vector3.new(0, 20, 0))
+	
+	repeat
+		task.wait()
+	until localPlayer.GameplayPaused == false
+end
+
+local function UpdateCarList()
+	ClearCarUI()
+	ClearHighlights()
+	
+	local availableCars = {}
+	
+	for _, carModel in pairs(vehicles:GetChildren()) do
+		if carModel:FindFirstChild("ClickDetector") then
+			table.insert(availableCars, carModel)
+			HighlightCar(carModel)
+		end
+	end
+	
+	if #availableCars == 0 then
+		statusLabel.Text = "No cars found"
+		return
+	end
+	
+	for i, carModel in ipairs(availableCars) do
+		local carText, carColor, rarityText = GetCarInfo(carModel)
+		
+		local carButton = CreateButton(carsScroll, UDim2.new(1, -10, 0, 50), UDim2.new(0, 5, 0, 10 + (i - 1) * 55), carText, carColor)
+		
+		carButton.MouseButton1Click:Connect(function()
+			TeleportToCar(carModel)
+		end)
+		
+		local rarityLabel = Instance.new("TextLabel")
+		rarityLabel.Size = UDim2.new(0, 40, 0, 15)
+		rarityLabel.Position = UDim2.new(1, -63, 0, 5)
+		rarityLabel.BackgroundTransparency = 1
+		rarityLabel.BackgroundColor3 = carColor
+		rarityLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		rarityLabel.Text = rarityText
+		rarityLabel.Font = Enum.Font.GothamBold
+		rarityLabel.TextSize = 10
+		rarityLabel.Parent = carButton
+		
+		carUiElements[carModel] = carButton
+	end
+	
+	carsScroll.CanvasSize = UDim2.new(0, 0, 0, 10 + #availableCars * 55)
+	statusLabel.Text = string.format("Found %d cars", #availableCars)
+end
+
+local function UpdateTeleportList()
+	for _, uiElement in pairs(teleportUiElements) do
+		if uiElement and uiElement.Parent then
+			uiElement:Destroy()
+		end
+	end
+	
+	teleportUiElements = {}
+	
+	local buttonIndex = 1
+	for locationName, locationCFrame in pairs(teleportLocations) do
+		local teleportButton = CreateButton(teleportScroll, UDim2.new(1, -10, 0, 40), UDim2.new(0, 5, 0, 10 + (buttonIndex - 1) * 45), locationName, Color3.fromRGB(60, 60, 60))
+		
+		teleportButton.MouseButton1Click:Connect(function()
+			TeleportToLocation(locationName, locationCFrame)
+		end)
+		
+		teleportUiElements[locationName] = teleportButton
+		buttonIndex += 1
+	end
+	
+	teleportScroll.CanvasSize = UDim2.new(0, 0, 0, 10 + buttonIndex * 45)
+end
+
+-- Tab switching
+local function SwitchTab(tabName)
+	carsFrame.Visible = tabName == "Cars"
+	teleportFrame.Visible = tabName == "Teleport"
+	visualFrame.Visible = tabName == "Visual"
+	boostFrame.Visible = tabName == "Boost"
+	repairFrame.Visible = tabName == "Repair"
+	autobuyFrame.Visible = tabName == "AutoBuy"
+	
+	local tabs = {carsTab, teleportTab, visualTab, boostTab, repairTab, autobuyTab}
+	local tabNames = {"Cars", "Teleport", "Visual", "Boost", "Repair", "AutoBuy"}
+	
+	for i, tabButton in ipairs(tabs) do
+		if tabNames[i] == tabName then
+			tabButton.BackgroundColor3 = Color3.fromRGB(80, 120, 200)
+		else
+			tabButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+		end
+	end
+end
+
+-- Tab button connections
+carsTab.MouseButton1Click:Connect(function()
+	SwitchTab("Cars")
+end)
+
+teleportTab.MouseButton1Click:Connect(function()
+	SwitchTab("Teleport")
+end)
+
+visualTab.MouseButton1Click:Connect(function()
+	SwitchTab("Visual")
+end)
+
+boostTab.MouseButton1Click:Connect(function()
+	SwitchTab("Boost")
+end)
+
+repairTab.MouseButton1Click:Connect(function()
+	SwitchTab("Repair")
+end)
+
+autobuyTab.MouseButton1Click:Connect(function()
+	SwitchTab("AutoBuy")
+end)
+
+-- Button functionality
+speedBoostButton.MouseButton1Click:Connect(function()
+	speedBoostEnabled = not speedBoostEnabled
+	speedBoostButton.Text = "Speed Boost: " .. (speedBoostEnabled and "ON" or "OFF")
+	speedBoostButton.BackgroundColor3 = speedBoostEnabled and Color3.fromRGB(80, 160, 80) or Color3.fromRGB(160, 80, 80)
+end)
+
+adjustBoostButton.MouseButton1Click:Connect(function()
+	boostForce += 50
+	if boostForce > 1000 then
+		boostForce = 100
+	end
+	boostForceLabel.Text = "Boost Force: " .. boostForce
+end)
+
+local function UpdateAutoKmUI()
+	autoKmButton.Text = "Auto KM: " .. (autoKmEnabled and "ON" or "OFF")
+	autoKmButton.BackgroundColor3 = autoKmEnabled and Color3.fromRGB(80, 160, 80) or Color3.fromRGB(160, 80, 80)
+	kmSpeedLabel.Text = "KM Speed: " .. kmSpeed
+end
+
+adjustKmButton.MouseButton1Click:Connect(function()
+	kmSpeed += 10
+	if kmSpeed > 300 then
+		kmSpeed = 20
+	end
+	UpdateAutoKmUI()
+	statusLabel.Text = "KM Speed set to: " .. kmSpeed
+end)
+
+highlightsButton.MouseButton1Click:Connect(function()
+	highlightsEnabled = not highlightsEnabled
+	highlightsButton.Text = "Highlights: " .. (highlightsEnabled and "ON" or "OFF")
+	highlightsButton.BackgroundColor3 = highlightsEnabled and Color3.fromRGB(80, 160, 80) or Color3.fromRGB(160, 80, 80)
+	
+	if not highlightsEnabled then
+		ClearHighlights()
+	else
+		UpdateCarList()
+	end
+end)
+
+-- Initialize
+task.wait(2)
+UpdateCarList()
+UpdateTeleportList()
+statusLabel.Text = "Enjoy :)"
+
+-- Anti-AFK
+localPlayer.Idled:Connect(function()
+	VirtualUser:CaptureController()
+	VirtualUser:ClickButton2(Vector2.new())
+end)
+
+-- Auto update car list
+local updatingCarList = false
+local function UpdateCarListAsync()
+	if updatingCarList then
+		return
+	end
+	updatingCarList = true
+	task.wait(2)
+	
+	local success, errorMsg = pcall(function()
+		UpdateCarList()
+	end)
+	
+	if not success then
+		warn("Car list update error: " .. tostring(errorMsg))
+	end
+	
+	updatingCarList = false
+end
+
+vehicles.ChildAdded:Connect(UpdateCarListAsync)
+vehicles.ChildRemoved:Connect(UpdateCarListAsync)
+
+-- Speed boost system
+local function ApplySpeedBoost()
+	if not speedBoostEnabled then
+		return
+	end
+	
+	local character = localPlayer.Character
+	if not character then
+		return
+	end
+	
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return
+	end
+	
+	local seatPart = humanoid.SeatPart
+	if seatPart and seatPart:IsA("VehicleSeat") then
+		local vehicle = seatPart:FindFirstAncestorOfClass("Model")
+		if vehicle then
+			local primaryPart = vehicle.PrimaryPart or vehicle:FindFirstChild("Chassis") or vehicle:FindFirstChildWhichIsA("BasePart")
+			if primaryPart then
+				local boostDirection = Vector3.new(seatPart.CFrame.LookVector.X, 0, seatPart.CFrame.LookVector.Z).Unit * boostForce
+				primaryPart.AssemblyLinearVelocity = Vector3.new(boostDirection.X, primaryPart.AssemblyLinearVelocity.Y, boostDirection.Z)
+			end
+		end
+	end
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+	
+	if input.KeyCode == Enum.KeyCode.Q then
+		ApplySpeedBoost()
+	end
+end)
